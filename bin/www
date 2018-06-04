@@ -1,0 +1,85 @@
+#!/usr/bin/env node
+const express = require('express');
+const app = express();
+const longpoll = require('express-longpoll')(app, {DEBUG: true});
+const puppeteer = require('puppeteer');
+const browser = async () => {
+    return await puppeteer.launch({headless: true});
+};
+
+browser().then((browser) => {
+
+    //CORS middleware
+    app.use(function (req, res, next) {
+        res.set('Access-Control-Allow-Origin', '*');
+        // res.header('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE');
+        // res.set('Access-Control-Allow-Headers', 'Content-Type');
+        next();
+    });
+    // UP server
+    app.listen(8080, function () {
+        console.log("Listening on port 8080");
+    });
+
+    // Creates app.get("/poll") for the long poll
+    longpoll.create("/poll");
+
+    let currentPage = null;
+    let currentGenre = null;
+
+    app.get('/stop', function (req, res) {
+
+        if (currentPage) {
+
+            (async (currentPage) => {
+                await currentPage.click('body > div.page-root > div.page-root__content > div.centerblock-wrapper > div.centerblock > div > div > div.page-station__controls > div > div.player-controls > div.player-controls__bar > div > div');
+            })(currentPage);
+
+            currentPage = null;
+        }
+
+        res.send(null);
+    });
+
+    app.get('/play/:genre', function (req, res) {
+
+        if (!currentPage || currentGenre !== req.params.genre) {
+            (async () => {
+                return await browser.pages();
+            })().then((pages) => {
+                // Грузим стрим
+                loadStream(pages[0], req.params.genre).then((page) => {
+                    currentPage = page;
+                });
+            });
+        } else {
+            (async (currentPage) => {
+                await currentPage.click('body > div.page-root > div.page-root__content > div.centerblock-wrapper > div.centerblock > div > div > div.page-station__controls > div > div.player-controls > div.player-controls__bar > div > div');
+            })(currentPage);
+        }
+
+        currentGenre = req.params.genre;
+
+        res.send(null);
+    });
+
+});
+
+async function loadStream(page, genre) {
+
+    await page.goto('https://radio.yandex.ru/genre/' + genre);
+
+    let playlist = [];
+
+    page.on('request', request => {
+        if (request.resourceType() === 'media'
+            && playlist.indexOf(request.url()) === -1
+            && request.url().match(new RegExp('https:\\/\\/'))
+        ) {
+            playlist.push(request.url());
+            longpoll.publish("/poll", {'url': request.url()});
+        }
+    });
+
+    return page;
+}
